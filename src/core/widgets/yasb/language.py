@@ -1,10 +1,12 @@
-import re
-from core.widgets.base import BaseWidget
-from core.validation.widgets.yasb.language import VALIDATION_SCHEMA
-from PyQt6.QtWidgets import QLabel, QHBoxLayout, QWidget
-from PyQt6.QtCore import Qt
 import ctypes
+import re
+
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QWidget
+
 from core.utils.widgets.animation_manager import AnimationManager
+from core.validation.widgets.yasb.language import VALIDATION_SCHEMA
+from core.widgets.base import BaseWidget
 
 # Constants
 LOCALE_NAME_MAX_LENGTH = 85
@@ -15,10 +17,13 @@ LOCALE_SCOUNTRY = 0x6
 LOCALE_SNAME = 0x5c
 LOCALE_SNATIVECTRYNAME = 0x07
 LOCALE_SNATIVELANGNAME = 0x04
+IME_CMODE_NATIVE = 0x0001
+IME_CMODE_KATAKANA = 0x0002
 
 # Define necessary ctypes structures and functions
 user32 = ctypes.WinDLL('user32', use_last_error=True)
 kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+imm32 = ctypes.WinDLL('imm32', use_last_error=True)
 
 class LanguageWidget(BaseWidget):
     validation_schema = VALIDATION_SCHEMA
@@ -38,7 +43,7 @@ class LanguageWidget(BaseWidget):
         self._label_alt_content = label_alt
         self._animation = animation
         self._padding = container_padding
-        
+
         # Construct container
         self._widget_container_layout: QHBoxLayout = QHBoxLayout()
         self._widget_container_layout.setSpacing(0)
@@ -91,7 +96,7 @@ class LanguageWidget(BaseWidget):
                 else:
                     label = QLabel(part)
                     label.setProperty("class", "label alt" if is_alt else "label")
-                label.setAlignment(Qt.AlignmentFlag.AlignCenter)    
+                label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 self._widget_container_layout.addWidget(label)
                 widgets.append(label)
                 if is_alt:
@@ -102,7 +107,7 @@ class LanguageWidget(BaseWidget):
         self._widgets = process_content(content)
         self._widgets_alt = process_content(content_alt, is_alt=True)
 
-        
+
     def _update_label(self):
         active_widgets = self._widgets_alt if self._show_alt_label else self._widgets
         active_label_content = self._label_alt_content if self._show_alt_label else self._label_content
@@ -113,7 +118,7 @@ class LanguageWidget(BaseWidget):
             lang = self._get_current_keyboard_language()
         except:
             lang = None
-            
+
         for part in label_parts:
             part = part.strip()
             if part and widget_index < len(active_widgets) and isinstance(active_widgets[widget_index], QLabel):
@@ -127,7 +132,7 @@ class LanguageWidget(BaseWidget):
                     active_widgets[widget_index].setText(formatted_text)
                 widget_index += 1
 
- 
+
     # Get the current keyboard layout
     def _get_current_keyboard_language(self):
         # Get the foreground window (the active window)
@@ -173,13 +178,57 @@ class LanguageWidget(BaseWidget):
         language_code = lang_name.value
         country_code = country_name.value
         full_name = f"{full_lang_name.value}"
+        layout_name = layout_locale_name.value
+        ime_mode_identifier = self._get_current_keyboard_ime_mode(hwnd)
+        ime_mode = self._interpret_ime_mode(ime_mode_identifier, layout_name)
         return {
             'language_code': language_code,
             'country_code': country_code,
             'full_name': full_name,
             'native_country_name': native_country_name.value,
             'native_lang_name': native_lang_name.value,
-            'layout_name': layout_locale_name.value,
+            'layout_name': layout_name,
             'full_layout_name': full_layout_locale_name.value,
-            'layout_country_name': layout_country_name.value
+            'layout_country_name': layout_country_name.value,
+            'ime_mode': ime_mode,
         }
+
+
+    def _get_current_keyboard_ime_mode(self, hwnd):
+        himc = imm32.ImmGetContext(hwnd)
+        if not himc:
+            return None
+
+        # Get the IME mode
+        try:
+            conversion = ctypes.c_uint()
+            sentence = ctypes.c_uint()
+
+            if imm32.ImmGetConversionStatus(himc, conversion, sentence):
+                ime_mode = conversion.value
+            else:
+                ime_mode = None
+
+        # Release the input context
+        finally:
+            imm32.ImmReleaseContext(hwnd, himc)
+        return ime_mode
+
+
+    def _interpret_ime_mode(self, ime_mode_identifier, layout_name: str):
+        if ime_mode_identifier is None:
+            return "" # Return empty so it won't show when not currently selected
+
+        is_native_ime_mode = ime_mode_identifier & IME_CMODE_NATIVE
+        if layout_name == "ja-JP" and is_native_ime_mode: # Japanese
+            if ime_mode_identifier & IME_CMODE_KATAKANA:
+                return "カ"  # Katakana
+            return "あ"  # Hiragana
+
+        if layout_name == "ko-KR" and is_native_ime_mode: # Korean
+            return "가"  # Hangul
+
+        if layout_name == "zh-CN" and is_native_ime_mode: # Chinese
+            return "中"  # Chinese
+
+        return "A"  # Alphanumeric
